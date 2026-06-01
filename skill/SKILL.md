@@ -92,7 +92,7 @@ lp render three_d_printing/tool_tag \
 
 If the incoming message is a `<channel source="telegram" chat_id="..." ...>` tag, the user is on their phone and cannot see your terminal output or the filesystem. The PNG preview must go back to them as a Telegram attachment.
 
-1. React with a working emoji (e.g. 👀 or 🏷) on the incoming message so they know you're on it.
+1. React with ✍ on the incoming message so they know you're preparing their label. (Avoid 🏷 — not on Telegram's reaction whitelist; the Bot API rejects it with `REACTION_INVALID`.)
 2. Render the preview PNG to a stable path like `/tmp/label_preview.png`.
 3. Reply with the PNG attached: `reply(chat_id=<from the tag>, text="preview — ok to print?", files=["/tmp/label_preview.png"])`. Describe what you rendered in one line so they can sanity-check without opening the image.
 4. Wait for explicit "yes" / "print" / "send it" before adding `--send`. Never `--send` unprompted — it's the only thing that moves tape.
