@@ -18,15 +18,11 @@ from label_printer.transport.network import NetworkTransport
 
 def _resolve_host(host: str | None) -> str:
     """Pick a printer host: explicit flag → LABEL_PRINTER_HOST env → saved state."""
-    import os
     if host:
         return host
-    env_host = os.environ.get("LABEL_PRINTER_HOST")
-    if env_host:
-        return env_host
-    saved = state_mod.load().printer_host
-    if saved:
-        return saved
+    resolved = state_mod.resolve_printer_host()
+    if resolved:
+        return resolved
     raise click.ClickException(
         "no printer host configured. Pass --host, set LABEL_PRINTER_HOST, "
         "or run `lp printer set <ip>` to persist one."
@@ -50,23 +46,19 @@ def _verify_tape_or_die(transport, tape: TapeWidth) -> None:
     network firmware uses TCP:9100 as write-only), warn and proceed without
     verification.
     """
-    from label_printer.status import TapeMismatchError, ensure_tape_matches
-    from label_printer.transport.base import StatusUnavailable
+    from label_printer.status import (
+        StatusQueryError,
+        TapeMismatchError,
+        check_tape_or_warn,
+    )
     try:
-        status = transport.query_status()
-    except StatusUnavailable as e:
-        click.secho(
-            f"warning: tape-width pre-check skipped ({e}). "
-            f"Confirm {int(tape)}mm tape is loaded before printing.",
-            fg="yellow",
-        )
-        return
-    except Exception as e:
+        warning = check_tape_or_warn(transport, tape)
+    except StatusQueryError as e:
         raise click.ClickException(f"could not query printer status: {e}") from e
-    try:
-        ensure_tape_matches(status, tape)
     except TapeMismatchError as e:
         raise click.ClickException(str(e)) from e
+    if warning:
+        click.secho(f"warning: {warning}", fg="yellow")
 
 
 def _render_with_extras(template, data: dict, tape: TapeWidth,
@@ -588,7 +580,12 @@ def _install_icon_repo(*, repo: str, subdir: str, target: Path, display: str) ->
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", default=8765, show_default=True, type=int)
 def serve(host: str, port: int) -> None:
-    """Run the label-printer HTTP service (Phase 6 stub, dry-run only)."""
+    """Run the label-printer HTTP service.
+
+    `/print` is a dry-run unless the request body sets ``send=true``, in which
+    case the service drives the network transport. Set ``LABEL_PRINTER_HOST``
+    (or run `lp printer set <ip>` once) so the service knows where to send.
+    """
     try:
         import uvicorn
     except ImportError as e:
@@ -597,7 +594,7 @@ def serve(host: str, port: int) -> None:
         ) from e
     from label_printer.service import app
 
-    click.echo(f"label-printer service on http://{host}:{port} (dry-run mode)")
+    click.echo(f"label-printer service on http://{host}:{port}")
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 

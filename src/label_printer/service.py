@@ -1,13 +1,16 @@
 """HTTP service for remote printing.
 
-Phase 3 ships a dry-run skeleton: `/render` returns a PNG, `/print` returns
-the raster command bytes but does NOT send them to a physical printer.
-Phase 5 swaps the `/print` endpoint to actually drive USB/BT transport.
+`/render` returns a PNG, `/print` returns the raster command bytes by default
+(dry-run) or drives the configured network transport when ``send=true``.
+The printer host is resolved the same way the CLI resolves it: the
+``LABEL_PRINTER_HOST`` environment variable, then the value persisted by
+``lp printer set <ip>``.
 """
 
 from __future__ import annotations
 
 import io
+import json
 import os
 from typing import Any
 
@@ -21,9 +24,16 @@ except ImportError as e:  # pragma: no cover
     ) from e
 
 from label_printer import encode_job
+from label_printer import state as state_mod
 from label_printer.engine.compose import compose_extras, strip_template_handled
+from label_printer.status import (
+    StatusQueryError,
+    TapeMismatchError,
+    check_tape_or_warn,
+)
 from label_printer.tape import TapeWidth
 from label_printer.templates import default_registry
+from label_printer.transport.network import NetworkTransport
 
 app = FastAPI(title="label-printer", version="0.1.0")
 _REGISTRY = default_registry()
@@ -59,13 +69,42 @@ def _render_body_with_extras(template, fields: dict, tape: TapeWidth,
 
 class PrintRequest(RenderRequest):
     # Dry-run by default — opt in explicitly to drive the hardware transport.
-    # Until Phase 5 lands, ``send=True`` will 501 because no transport is wired.
     send: bool = False
 
 
+def _resolve_printer_host() -> str:
+    """Pick a printer host: LABEL_PRINTER_HOST env → saved state.
+
+    Raises HTTPException(503) if neither is set — the service can't reach any
+    printer without one.
+    """
+    resolved = state_mod.resolve_printer_host()
+    if resolved:
+        return resolved
+    raise HTTPException(
+        503,
+        "no printer host configured. Set LABEL_PRINTER_HOST or run "
+        "`lp printer set <ip>` on the service host.",
+    )
+
+
+def _verify_tape(transport: NetworkTransport, tape: TapeWidth) -> str | None:
+    """Check the loaded tape matches the job. Returns a warning string if the
+    check was skipped (SNMP unavailable), None on success. Raises
+    HTTPException(409) on a real mismatch or printer error, 502 if the status
+    query itself fails.
+    """
+    try:
+        return check_tape_or_warn(transport, tape)
+    except StatusQueryError as e:
+        raise HTTPException(502, f"could not query printer status: {e}") from e
+    except TapeMismatchError as e:
+        raise HTTPException(409, str(e)) from e
+
+
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "mode": "dry-run"}
+def health() -> dict[str, Any]:
+    return {"status": "ok", "printer_configured": bool(state_mod.resolve_printer_host())}
 
 
 @app.get("/templates")
@@ -117,15 +156,30 @@ def print_(req: PrintRequest, authorization: str | None = Header(default=None)) 
     image = _render_body_with_extras(template, req.fields, tape, req.link, req.image)
     data = encode_job(image, tape)
 
-    if req.send:
-        raise HTTPException(
-            501,
-            "hardware transport not available yet (arrives in Phase 5). "
-            "Omit 'send' or set it to false for a dry-run.",
+    if not req.send:
+        return Response(
+            data,
+            media_type="application/octet-stream",
+            headers={"X-Dry-Run": "true", "X-Bytes": str(len(data))},
         )
 
+    host = _resolve_printer_host()
+    transport = NetworkTransport(host)
+    warning = _verify_tape(transport, tape)
+    try:
+        transport.send(data)
+    except OSError as e:
+        raise HTTPException(502, f"could not reach printer at {host}: {e}") from e
+
+    body: dict[str, Any] = {
+        "sent": True,
+        "host": host,
+        "bytes": len(data),
+    }
+    if warning:
+        body["warning"] = warning
     return Response(
-        data,
-        media_type="application/octet-stream",
-        headers={"X-Dry-Run": "true", "X-Bytes": str(len(data))},
+        json.dumps(body),
+        media_type="application/json",
+        headers={"X-Dry-Run": "false", "X-Bytes": str(len(data))},
     )

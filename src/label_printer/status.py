@@ -182,3 +182,35 @@ def ensure_tape_matches(status: PrinterStatus, requested: TapeWidth) -> None:
         raise TapeMismatchError(
             f"wrong tape loaded: want {int(requested)}mm, printer has {int(loaded)}mm"
         )
+
+
+def check_tape_or_warn(transport, requested: TapeWidth) -> str | None:
+    """Shared pre-print tape check for CLI and service.
+
+    Returns a warning string when the check had to be skipped (the transport
+    can't report status — e.g. SNMP disabled on a network printer), or None
+    when the loaded tape matches ``requested``.
+
+    Raises:
+        TapeMismatchError: the printer answered and the tape doesn't match
+            (or it reports an error / no media).
+        StatusQueryError: the transport claims to be status-aware but the
+            query itself failed for an unexpected reason.
+    """
+    from label_printer.transport.base import StatusUnavailable
+
+    try:
+        status = transport.query_status()
+    except StatusUnavailable as e:
+        return (
+            f"tape-width pre-check skipped ({e}); confirm "
+            f"{int(requested)}mm tape is loaded"
+        )
+    except Exception as e:
+        raise StatusQueryError(str(e)) from e
+    ensure_tape_matches(status, requested)
+    return None
+
+
+class StatusQueryError(RuntimeError):
+    """Raised when a status-aware transport fails to answer a status query."""

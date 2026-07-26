@@ -21,7 +21,10 @@ from PIL import Image, ImageDraw, ImageFont
 from label_printer.constants import DPI
 from label_printer.tape import TapeWidth, geometry_for
 
-FONTS_DIR = Path(__file__).resolve().parents[3] / "assets" / "fonts"
+# Fonts ship inside the package (src/label_printer/fonts) so they resolve
+# identically from a source checkout, an editable install, and an installed
+# wheel (e.g. the Docker image). Declared as package-data in pyproject.toml.
+FONTS_DIR = Path(__file__).resolve().parents[1] / "fonts"
 DEFAULT_FONT = FONTS_DIR / "DejaVuSans.ttf"
 DEFAULT_BOLD = FONTS_DIR / "DejaVuSans-Bold.ttf"
 DEFAULT_MONO = FONTS_DIR / "DejaVuSansMono.ttf"

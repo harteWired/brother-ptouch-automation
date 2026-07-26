@@ -134,7 +134,7 @@ Target hardware: **Brother PT-P750W** (primary — half-cut, Wi-Fi). Raster-comp
 4. **First physical print**: `lp print kitchen/pantry_jar --name "HELLO" --tape 12 --transport usb`. If this comes out right the first time, our Phase 1 goldens validated against the real printer and we can trust the encoder wholesale. If not, that's the bug to fix first.
 5. Smoke-test every template in both tape widths we own (12mm + 24mm). Any template that looks wrong on paper vs. tape gets a fix in Phase 2 code and a regenerated golden.
 6. Validate status/query commands — can we read tape width from the printer? If yes, wire it into `lp scan` and default `--tape` to the loaded cassette.
-7. Flip the service's `POST /print` stub from `DryRunTransport` to the real one.
+7. ~~Flip the service's `POST /print` stub from `DryRunTransport` to the real one.~~ **Done** — `POST /print` with `"send": true` now drives `NetworkTransport`, with the same host-resolution (`LABEL_PRINTER_HOST` → saved state) and SNMP tape-width pre-check the CLI uses.
 8. Experiments to close out:
    - BT pairing stability over a reboot
    - Chaining / auto-cut / half-cut behavior (note findings in `research/brother-raster-protocol.md`)

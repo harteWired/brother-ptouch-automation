@@ -169,6 +169,7 @@ lp serve --host 127.0.0.1 --port 8765  # FastAPI HTTP service
 
 ```bash
 export LABEL_PRINTER_TOKEN=s3cret     # optional bearer-token auth
+export LABEL_PRINTER_HOST=192.168.1.50  # printer IP for send:true (or `lp printer set`)
 lp serve --host 127.0.0.1 --port 8765
 ```
 
@@ -189,6 +190,32 @@ curl -X POST http://127.0.0.1:8765/print \
 ```
 
 Endpoints: `GET /health`, `GET /templates`, `POST /render`, `POST /print`.
+
+`POST /print` with `"send": true` resolves the printer host the same way the CLI does — `LABEL_PRINTER_HOST` env var first, then the value persisted by `lp printer set <ip>`. Before sending, the service queries the printer over SNMP and returns `409` if the loaded tape width doesn't match `tape_mm` (if SNMP is disabled on the printer, the check is skipped and the response carries a `warning` field). Transport failures return `502`; a missing printer host returns `503`.
+
+#### Docker
+
+Container images are defined in `containers/<name>/` — one folder per image. Each build publishes `ghcr.io/<owner>/<name>` (`:latest` plus an auto-incremented `:X.Y.Z`). Versions are tracked per container by `<name>-vX.Y.Z` git tags rather than VERSION files — each folder has its own independent version line, and a new folder starts at `0.0.1`.
+
+**What triggers a build:**
+
+| Trigger | What gets built |
+|---|---|
+| Push to `main` touching `containers/<name>/**` | Just that container |
+| Push to `main` touching `src/**` or `pyproject.toml` | **All** containers — the images bake in the Python package, so a source change affects every image |
+| Manual: Actions → `docker-build` → Run workflow | One named container, or all (default) |
+| Weekly schedule (Sun 03:17 UTC) | All containers — picks up base-image (`python:slim`) security patches and apt updates even when the repo is quiet |
+
+The label-printer image runs `lp serve --host 0.0.0.0 --port 8765` as a non-root user:
+
+```bash
+docker run -p 8765:8765 \
+  -e LABEL_PRINTER_HOST=192.168.1.50 \
+  -e LABEL_PRINTER_TOKEN=s3cret \
+  ghcr.io/<owner>/brother-ptouch-automation:latest
+```
+
+To persist CLI state (e.g. `lp printer set`) across restarts, mount a volume at `/home/labelprinter/.config/label-printer`.
 
 ### Claude Code skill
 
@@ -352,7 +379,7 @@ Built from Brother's [official raster command manual](https://download.brother.c
 - [treideme/brother_pt](https://github.com/treideme/brother_pt) — Python USB driver, Apache 2.0
 - [robby-cornelissen/pt-p710bt-label-maker](https://github.com/robby-cornelissen/pt-p710bt-label-maker) — Python Bluetooth driver
 
-Bundled icons are [Lucide](https://lucide.dev/) (ISC) — see [`assets/icons/LICENSE-Lucide.txt`](assets/icons/LICENSE-Lucide.txt). Bundled fonts are DejaVu (Bitstream Vera derivative) — see [`assets/fonts/LICENSE-DejaVu.txt`](assets/fonts/LICENSE-DejaVu.txt). Full dependency list and license attributions in [`CREDITS.md`](CREDITS.md).
+Bundled icons are [Lucide](https://lucide.dev/) (ISC) — see [`src/label_printer/icons/LICENSE-Lucide.txt`](src/label_printer/icons/LICENSE-Lucide.txt). Bundled fonts are DejaVu (Bitstream Vera derivative) — see [`src/label_printer/fonts/LICENSE-DejaVu.txt`](src/label_printer/fonts/LICENSE-DejaVu.txt). Full dependency list and license attributions in [`CREDITS.md`](CREDITS.md).
 
 ## License
 

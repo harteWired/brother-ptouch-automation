@@ -1,0 +1,21 @@
+# Keep the Docker build context small and layer-cache friendly.
+.git
+.github
+.kilo
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+docs
+research
+tests
+skill
+assets
+scripts
+out*.bin
+out_*.png
+*.egg-info
+dist
+build

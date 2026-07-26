@@ -141,7 +141,7 @@ class CableFlagTemplate(Template):
                 "Optional bitmap path. Renders flush-left on each face — good "
                 "for a big mains / low-voltage / hazard symbol.",
                 required=False,
-                example="assets/icons/lucide/zap.svg",
+                example="src/label_printer/icons/lucide/zap.svg",
             ),
             TemplateField(
                 "wire",

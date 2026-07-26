@@ -41,7 +41,15 @@ lp = "label_printer.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-label_printer = ["py.typed"]
+label_printer = [
+    "py.typed",
+    "templates/**/presets.toml",
+    "fonts/**/*.ttf",
+    "fonts/**/*.otb",
+    "fonts/**/LICENSE-*.txt",
+    "icons/**/*.svg",
+    "icons/**/LICENSE-*.txt",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

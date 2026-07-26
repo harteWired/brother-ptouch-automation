@@ -33,6 +33,23 @@ def load() -> State:
     return State(**{k: v for k, v in data.items() if k in State.__dataclass_fields__})
 
 
+def resolve_printer_host() -> str | None:
+    """Resolve the configured printer host: LABEL_PRINTER_HOST env → saved state.
+
+    Returns None when nothing is configured. A corrupt or unreadable state
+    file is treated as "no saved host" rather than raising, so callers
+    (liveness probes, host resolution) stay robust in the face of a bad
+    ``state.toml``.
+    """
+    env_host = os.environ.get("LABEL_PRINTER_HOST")
+    if env_host:
+        return env_host
+    try:
+        return load().printer_host
+    except Exception:
+        return None
+
+
 def save(state: State) -> Path:
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     # TOML has no null — omit None fields so the file stays parseable.

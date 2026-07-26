@@ -1,0 +1,186 @@
+name: docker-build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # Only run when a container definition (or the shared source it builds
+      # from) changed. Each containers/<name>/ folder is one image.
+      - 'containers/**'
+      - 'src/**'
+      - 'pyproject.toml'
+  # Manual rebuild (Actions → docker-build → Run workflow). Optionally limit
+  # to one container; default rebuilds all.
+  workflow_dispatch:
+    inputs:
+      container:
+        description: 'Container folder name to build (e.g. brother-ptouch-automation), or "all"'
+        required: true
+        default: 'all'
+        type: string
+  # Weekly rebuild so images pick up base-image (python:slim) security patches
+  # and apt updates even when the repo is quiet. Sundays 03:17 UTC.
+  schedule:
+    - cron: '17 3 * * 0'
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed-containers: ${{ steps.changed.outputs.containers }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed container folders
+        id: changed
+        run: |
+          # A "container" is a folder under containers/ that contains a
+          # Dockerfile. Stray files (e.g. containers/README.md) are ignored.
+          all_containers() {
+            find containers -mindepth 2 -maxdepth 2 -name Dockerfile \
+              | xargs -r -n1 dirname | sort
+          }
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual run: one named container, or all of them.
+            if [ '${{ inputs.container }}' = 'all' ]; then
+              CONTAINERS=$(all_containers)
+            else
+              CONTAINERS="containers/${{ inputs.container }}"
+              if [ ! -f "$CONTAINERS/Dockerfile" ]; then
+                echo "::error::No Dockerfile at $CONTAINERS"
+                exit 1
+              fi
+            fi
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            # Weekly rebuild: everything.
+            CONTAINERS=$(all_containers)
+          else
+            # Push: diff to find what changed. For the first push to a new
+            # branch (before = 000...), diff against the empty tree instead.
+            BEFORE='${{ github.event.before }}'
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              CHANGED_FILES=$(git diff --name-only 4b825dc642cb6eb9a060e54bf8d69288fbee4904 '${{ github.sha }}')
+            else
+              CHANGED_FILES=$(git diff --name-only "$BEFORE" '${{ github.sha }}')
+            fi
+
+            # Shared source changes affect every container image.
+            if echo "$CHANGED_FILES" | grep -qE '^(src/|pyproject\.toml)'; then
+              CONTAINERS=$(all_containers)
+            else
+              # Changed container folders — filtered to real containers only.
+              CANDIDATES=$(echo "$CHANGED_FILES" | grep '^containers/' | cut -d/ -f1-2 | sort -u)
+              CONTAINERS=$(comm -12 <(echo "$CANDIDATES") <(all_containers))
+            fi
+          fi
+
+          JSON=$(echo "$CONTAINERS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "containers=$JSON" >> "$GITHUB_OUTPUT"
+          echo "Changed containers: $JSON"
+
+  build-and-push:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.changed-containers != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        container: ${{ fromJson(needs.detect-changes.outputs.changed-containers) }}
+    permissions:
+      contents: write   # push the version tag
+      packages: write   # push to ghcr.io
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history so we can see all existing tags
+
+      - name: Get container name
+        id: info
+        run: |
+          NAME=$(basename '${{ matrix.container }}')
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "image=${{ env.REGISTRY }}/${{ github.repository_owner }}/$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No concurrency group: the git tag is the lock. We build once into the
+      # local daemon, then claim a version by creating <name>-vX.Y.Z — git ref
+      # creation is an atomic compare-and-swap, so exactly one run wins each
+      # version. Only then is the image pushed under the claimed version +
+      # latest. A losing run recomputes from the fresh tag set and pushes the
+      # SAME local image, so a version tag on ghcr always matches the commit
+      # its git tag points at.
+      - name: Build image (local daemon)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.container }}/Dockerfile
+          push: false
+          load: true
+          tags: ${{ steps.info.outputs.image }}:candidate
+          cache-from: type=gha,scope=${{ steps.info.outputs.name }}
+          cache-to: type=gha,mode=max,scope=${{ steps.info.outputs.name }}
+
+      - name: Claim version via git tag (atomic, with retry)
+        id: version
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          NAME='${{ steps.info.outputs.name }}'
+
+          for attempt in 1 2 3 4 5; do
+            # Highest existing <name>-vX.Y.Z tag wins; start at 0.0.0 if none.
+            CURRENT=$(git tag -l "${NAME}-v[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname | head -n1)
+            CURRENT=${CURRENT:-${NAME}-v0.0.0}
+            VERSION_PART="${CURRENT#${NAME}-v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_PART"
+            NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+            TAG="${NAME}-v${NEW_VERSION}"
+
+            echo "Attempt $attempt: claiming $TAG (current highest: $CURRENT)"
+            if git tag -a "$TAG" -m "Release $TAG" && git push origin "$TAG"; then
+              echo "Claimed $TAG"
+              echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            # Someone else claimed a version first — drop our local tag,
+            # pull the fresh tag set, and recompute.
+            git tag -d "$TAG" >/dev/null 2>&1 || true
+            git fetch --tags --force origin
+            sleep $((attempt * 2))
+          done
+
+          echo "::error::Could not claim a version tag for $NAME after 5 attempts"
+          exit 1
+
+      - name: Publish image under claimed version
+        run: |
+          IMAGE='${{ steps.info.outputs.image }}'
+          VERSION='${{ steps.version.outputs.version }}'
+          docker tag "$IMAGE:candidate" "$IMAGE:$VERSION"
+          docker tag "$IMAGE:candidate" "$IMAGE:latest"
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:latest"
+          echo "Published $IMAGE:$VERSION and $IMAGE:latest"
+        # Note: :$VERSION is always correct (claimed atomically above).
+        # :latest is last-writer-wins — two concurrent runs finishing out of
+        # order can briefly point it at the older commit's image. Pin to
+        # version tags for anything that cares; the next run always fixes it.

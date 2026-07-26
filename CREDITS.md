@@ -22,9 +22,9 @@ copied from either project, but both significantly informed the design.
 
 ## Bundled fonts
 
-`assets/fonts/` contains the DejaVu Sans family (regular + bold + mono). See
-`assets/fonts/LICENSE-DejaVu.txt` for the license. Source:
-<https://dejavu-fonts.github.io/>.
+`src/label_printer/fonts/` contains the DejaVu Sans family (regular + bold +
+mono). See `src/label_printer/fonts/LICENSE-DejaVu.txt` for the license.
+Source: <https://dejavu-fonts.github.io/>.
 
 ## Runtime dependencies
 

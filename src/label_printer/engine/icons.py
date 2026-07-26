@@ -1,10 +1,10 @@
 """Icon loading and rendering for labels.
 
 Icons are an optional feature. The base install ships a small curated set
-of line-art icons from `Lucide <https://lucide.dev/>`_ under
-``assets/icons/lucide/``. Heavier sets (full Lucide, Material Design Icons)
-can be installed on demand into ``~/.config/label-printer/icons/`` via the
-``lp icons install-*`` CLI commands.
+of line-art icons from `Lucide <https://lucide.dev/>`_ bundled inside the
+package under ``label_printer/icons/lucide/``. Heavier sets (full Lucide,
+Material Design Icons) can be installed on demand into
+``~/.config/label-printer/icons/`` via the ``lp icons install-*`` CLI commands.
 
 Rendering requires ``cairosvg`` — install via ``pip install label-printer[icons]``.
 Without that extra, icon lookups raise ``IconEngineUnavailable`` so templates
@@ -14,7 +14,7 @@ Lookup precedence (highest first):
 
 1. Directories listed in ``LABEL_PRINTER_ICON_PATH`` (``:``-separated).
 2. ``~/.config/label-printer/icons/<source>/`` for each known source.
-3. Bundled ``assets/icons/<source>/`` inside the installed package.
+3. Bundled ``label_printer/icons/<source>/`` inside the installed package.
 
 Names can be bare (``wifi``) — first match across sources wins — or
 namespaced (``lucide:wifi``, ``mdi:wifi``) — only that source is consulted.
@@ -35,7 +35,10 @@ try:
 except ImportError:  # pragma: no cover — exercised in test via monkeypatch
     _CAIROSVG_AVAILABLE = False
 
-_BUNDLED_ROOT = Path(__file__).resolve().parents[3] / "assets" / "icons"
+# Bundled icons ship inside the package (src/label_printer/icons) so they
+# resolve identically from a source checkout, an editable install, and an
+# installed wheel (e.g. the Docker image). Declared as package-data.
+_BUNDLED_ROOT = Path(__file__).resolve().parents[1] / "icons"
 _USER_ROOT = Path(
     os.environ.get("LABEL_PRINTER_ICON_HOME")
     or (Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "label-printer" / "icons")

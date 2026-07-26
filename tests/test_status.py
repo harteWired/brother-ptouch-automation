@@ -13,8 +13,10 @@ from label_printer.constants import (
 )
 from label_printer.status import (
     StatusPacketError,
+    StatusQueryError,
     TapeMismatchError,
     build_mock_status,
+    check_tape_or_warn,
     ensure_tape_matches,
     parse_status,
 )
@@ -117,3 +119,42 @@ def test_dryrun_is_not_recognised_as_status_aware_by_default(tmp_path):
 def test_mock_status_reports_reply_type_by_default():
     s = parse_status(build_mock_status())
     assert s.status_type == int(StatusType.REPLY_TO_REQUEST)
+
+
+# --- check_tape_or_warn (shared CLI/service pre-print policy) ---------------
+
+class _Transport:
+    """Minimal status-aware transport stub."""
+    def __init__(self, *, status=None, exc=None):
+        self._status = status
+        self._exc = exc
+
+    def query_status(self):
+        if self._exc is not None:
+            raise self._exc
+        return self._status
+
+
+def test_check_tape_or_warn_returns_none_on_match():
+    t = _Transport(status=parse_status(build_mock_status(media_width_mm=12)))
+    assert check_tape_or_warn(t, TapeWidth.MM_12) is None
+
+
+def test_check_tape_or_warn_returns_warning_when_status_unavailable():
+    t = _Transport(exc=StatusUnavailable("SNMP disabled"))
+    warning = check_tape_or_warn(t, TapeWidth.MM_12)
+    assert warning is not None
+    assert "12mm" in warning
+    assert "SNMP disabled" in warning
+
+
+def test_check_tape_or_warn_raises_mismatch_on_wrong_tape():
+    t = _Transport(status=parse_status(build_mock_status(media_width_mm=24)))
+    with pytest.raises(TapeMismatchError, match="wrong tape"):
+        check_tape_or_warn(t, TapeWidth.MM_12)
+
+
+def test_check_tape_or_warn_wraps_unexpected_query_errors():
+    t = _Transport(exc=OSError("socket exploded"))
+    with pytest.raises(StatusQueryError, match="socket exploded"):
+        check_tape_or_warn(t, TapeWidth.MM_12)
